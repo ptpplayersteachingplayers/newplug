@@ -61,6 +61,11 @@ if (!defined('PTP_COMM_INLINE_CSS')) {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 24px;
+  background: var(--ptp-card);
+  border: 1px solid var(--ptp-border);
+  border-radius: var(--ptp-radius);
+  box-shadow: var(--ptp-shadow);
+  padding: 16px 20px;
 }
 
 .ptp-commhub-title {
@@ -69,6 +74,7 @@ if (!defined('PTP_COMM_INLINE_CSS')) {
   color: var(--ptp-ink);
   display: flex;
   align-items: center;
+  gap: 8px;
 }
 
 .ptp-commhub-header .description {
@@ -123,6 +129,23 @@ if (!defined('PTP_COMM_INLINE_CSS')) {
   border: 1px solid var(--ptp-border);
   box-shadow: var(--ptp-shadow);
   padding: 18px 20px;
+  position: relative;
+  overflow: hidden;
+  margin-bottom: 18px;
+}
+
+.ptp-commhub-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: linear-gradient(90deg, rgba(252, 185, 0, 0.9), rgba(16, 185, 129, 0.35));
+}
+
+.ptp-commhub-card > * {
+  position: relative;
 }
 
 /* Universal admin scaffolding to keep every page aligned */
@@ -923,6 +946,10 @@ if (!defined('PTP_COMM_INLINE_CSS')) {
 .ptp-inbox-empty {
   text-align: center;
   padding: 60px 20px;
+  background: #fbfbfd;
+  border: 1px dashed var(--ptp-border);
+  border-radius: var(--ptp-radius);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.6);
 }
 
 .ptp-inbox-empty .dashicons {
@@ -963,7 +990,19 @@ if (!defined('PTP_COMM_INLINE_CSS')) {
   border-radius: var(--ptp-radius);
   padding: 20px;
   box-shadow: var(--ptp-shadow);
+  position: relative;
+  overflow: hidden;
 }
+
+.ptp-stat-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(252, 185, 0, 0.08), rgba(16, 185, 129, 0.05));
+  pointer-events: none;
+}
+
+.ptp-stat-card > * { position: relative; }
 
 .ptp-stat-label {
   font-size: 12px;
@@ -993,6 +1032,19 @@ if (!defined('PTP_COMM_INLINE_CSS')) {
 
 .ptp-stat-change--negative {
   color: #ef4444;
+}
+
+.ptp-commhub-card-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.ptp-commhub-card-title small {
+  color: var(--ptp-muted);
+  font-weight: 500;
 }
 
 /* ============================================================================
@@ -1039,6 +1091,11 @@ if (!defined('PTP_COMM_INLINE_CSS')) {
   padding: 12px 16px;
 }
 
+.ptp-commhub-card .form-table tr:nth-child(odd) td,
+.ptp-commhub-card .form-table tr:nth-child(odd) th {
+  background: rgba(15, 23, 42, 0.015);
+}
+
 .ptp-commhub-card .form-table input[type="text"],
 .ptp-commhub-card .form-table input[type="password"],
 .ptp-commhub-card .form-table input[type="tel"],
@@ -1080,6 +1137,14 @@ if (!defined('PTP_COMM_INLINE_CSS')) {
   box-shadow: var(--ptp-shadow);
 }
 
+.ptp-commhub-card table.wp-list-table td strong {
+  color: var(--ptp-ink);
+}
+
+.ptp-commhub-card table.wp-list-table .row-actions span {
+  color: var(--ptp-muted);
+}
+
 .ptp-commhub-card .widefat thead th,
 .ptp-commhub-card table.wp-list-table thead th {
   background: var(--ptp-bg);
@@ -1098,6 +1163,39 @@ if (!defined('PTP_COMM_INLINE_CSS')) {
 .ptp-commhub-card table.wp-list-table tbody tr:hover {
   background: rgba(252, 185, 0, 0.06);
 }
+
+.ptp-commhub-card .button.button-small,
+.ptp-commhub-card .button.button-secondary {
+  border-radius: 10px;
+  border-color: var(--ptp-border);
+  color: var(--ptp-ink);
+  background: linear-gradient(180deg, #fff 0%, #f9fafb 100%);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+}
+
+.ptp-commhub-card .button.button-primary,
+.ptp-commhub-card .button.button-small.button-primary {
+  background: var(--ptp-yellow);
+  border-color: var(--ptp-yellow);
+  color: var(--ptp-ink);
+  border-radius: 10px;
+  box-shadow: 0 10px 20px rgba(252, 185, 0, 0.25);
+}
+
+.ptp-commhub-card .button:hover {opacity: 0.92;}
+
+.ptp-filter-toolbar {
+  display: flex;
+  gap: 18px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  border: 1px dashed var(--ptp-border);
+  border-radius: 12px;
+  background: #fbfbfd;
+}
+
+.ptp-filter-toolbar .ptp-filter-select {width: auto; min-width: 180px;}
 
 .ptp-commhub-card .widefat tbody tr:focus-within,
 .ptp-commhub-card table.wp-list-table tbody tr:focus-within {
@@ -3191,7 +3289,7 @@ function ptp_commhub_render_campaign_builder() {
     }
     
     .ptp-wizard-steps::before {
-        content: '';
+        content: "";
         position: absolute;
         top: 20px;
         left: 40px;
@@ -3599,15 +3697,21 @@ function ptp_commhub_render_analytics() {
         flex-direction: column;
         gap: 12px;
         margin-top: 12px;
+        background: #fbfbfd;
+        border: 1px solid var(--ptp-border);
+        border-radius: 12px;
+        padding: 12px;
     }
-    
+
     .ptp-template-stat-row {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        padding: 10px;
-        background: var(--ptp-bg);
-        border-radius: 8px;
+        padding: 10px 12px;
+        background: white;
+        border-radius: 10px;
+        border: 1px solid var(--ptp-border);
+        box-shadow: 0 6px 14px rgba(15, 23, 42, 0.06);
     }
     
     .ptp-template-name {
@@ -5014,7 +5118,7 @@ function ptp_commhub_render_audit_log() {
         
         <!-- Filters -->
         <div class="ptp-commhub-card" style="margin-bottom: 20px;">
-            <div style="display: flex; gap: 16px; align-items: center; flex-wrap: wrap;">
+            <div class="ptp-filter-toolbar">
                 <div>
                     <label class="ptp-filter-label">Time Period</label>
                     <select class="ptp-filter-select" onchange="ptp_updateAuditFilter('days', this.value)">
