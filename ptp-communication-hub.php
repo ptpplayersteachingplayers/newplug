@@ -125,6 +125,33 @@ if (!defined('PTP_COMM_INLINE_CSS')) {
   padding: 18px 20px;
 }
 
+/* Universal admin scaffolding to keep every page aligned */
+.ptp-commhub-card h2,
+.ptp-commhub-card h3,
+.ptp-commhub-card h4 {
+  margin-top: 0;
+  color: var(--ptp-ink);
+}
+
+.ptp-commhub-card .ptp-card-meta {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  color: var(--ptp-muted);
+  font-size: 13px;
+}
+
+.ptp-commhub-card .wp-list-table th,
+.ptp-commhub-card .wp-list-table td {
+  font-size: 13px;
+  vertical-align: middle;
+}
+
+.ptp-commhub-card .wp-list-table thead th {
+  background: #f8fafc;
+}
+
 .ptp-commhub-card-title {
   font-size: 14px;
   font-weight: 600;
@@ -1709,7 +1736,8 @@ function ptp_comm_create_roles() {
         'read' => true,
         'view_ptp_conversations' => true,
         'send_ptp_messages' => true,
-        'manage_ptp_templates' => true
+        'manage_ptp_templates' => true,
+        'view_ptp_analytics' => true
     ));
     
     // Grant capabilities to admin
@@ -1725,6 +1753,33 @@ function ptp_comm_create_roles() {
         $admin->add_cap('manage_ptp_users');
     }
 }
+
+// Ensure capabilities stay in sync even after updates
+function ptp_comm_sync_capabilities() {
+    $admin = get_role('administrator');
+    if ($admin) {
+        foreach (array(
+            'manage_ptp_commhub_settings',
+            'view_ptp_conversations',
+            'send_ptp_messages',
+            'view_ptp_analytics',
+            'manage_ptp_campaigns',
+            'manage_ptp_templates',
+            'view_ptp_audit_log',
+            'manage_ptp_users'
+        ) as $cap) {
+            if (!$admin->has_cap($cap)) {
+                $admin->add_cap($cap);
+            }
+        }
+    }
+
+    $agent = get_role('ptp_commhub_agent');
+    if ($agent && !$agent->has_cap('view_ptp_analytics')) {
+        $agent->add_cap('view_ptp_analytics');
+    }
+}
+add_action('admin_init', 'ptp_comm_sync_capabilities');
 
 /**
  * Install Default Templates
@@ -4035,13 +4090,21 @@ function ptp_commhub_render_contacts() {
     
     // Get stats
     $stats = $wpdb->get_row("
-        SELECT 
+        SELECT
             COUNT(*) as total,
             SUM(CASE WHEN consent_status = 'opt_in' THEN 1 ELSE 0 END) as opted_in,
             SUM(CASE WHEN consent_status = 'opt_out' THEN 1 ELSE 0 END) as opted_out,
             SUM(CASE WHEN consent_status = 'unknown' THEN 1 ELSE 0 END) as unknown
         FROM {$wpdb->prefix}ptp_parents
     ");
+
+    // Normalize stats so null counts don't trigger deprecated notices
+    $stats = (object) array(
+        'total' => isset($stats->total) ? (int) $stats->total : 0,
+        'opted_in' => isset($stats->opted_in) ? (int) $stats->opted_in : 0,
+        'opted_out' => isset($stats->opted_out) ? (int) $stats->opted_out : 0,
+        'unknown' => isset($stats->unknown) ? (int) $stats->unknown : 0
+    );
     
     ?>
     <div class="ptp-commhub-wrap">
