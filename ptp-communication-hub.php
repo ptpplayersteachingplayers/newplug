@@ -3,7 +3,7 @@
  * Plugin Name: PTP Communication Hub - Enterprise Edition
  * Plugin URI: https://ptpsoccercamps.com
  * Description: Enterprise-grade unified communication platform with SMS, voice, email, branded UI, campaign builder, analytics, and complete CRM integration
- * Version: 5.0.0
+ * Version: 5.0.1
  * Author: PTP Soccer Camps
  * Author URI: https://ptpsoccercamps.com
  * License: GPL v2 or later
@@ -18,10 +18,12 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('PTP_COMM_VERSION', '5.0.0');
+define('PTP_COMM_VERSION', '5.0.1');
 define('PTP_COMM_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('PTP_COMM_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('PTP_COMM_PLUGIN_FILE', __FILE__);
+define('PTP_COMM_INBOX_PAGE_SIZE', 100);
+define('PTP_COMM_THREAD_PAGE_SIZE', 100);
 
 // Inline assets for single-file distribution
 if (!defined('PTP_COMM_INLINE_CSS')) {
@@ -1345,6 +1347,7 @@ function ptp_comm_activate() {
     $sql_queue = "CREATE TABLE IF NOT EXISTS $table_queue (
         id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
         parent_id bigint(20) unsigned NOT NULL,
+        conversation_id bigint(20) unsigned,
         channel varchar(20) NOT NULL,
         content text NOT NULL,
         campaign_id bigint(20) unsigned,
@@ -1359,7 +1362,8 @@ function ptp_comm_activate() {
         PRIMARY KEY  (id),
         KEY status (status),
         KEY scheduled_for (scheduled_for),
-        KEY campaign_id (campaign_id)
+        KEY campaign_id (campaign_id),
+        KEY conversation_id (conversation_id)
     ) $charset_collate;";
     
     // Voice calls table
@@ -1871,7 +1875,10 @@ function ptp_commhub_render_inbox() {
     }
     
     if ($market_filter !== 'all') {
-        $where[] = $wpdb->prepare("p.markets LIKE %s", '%' . $market_filter . '%');
+        $where[] = $wpdb->prepare(
+            "p.markets LIKE %s",
+            '%' . $wpdb->esc_like($market_filter) . '%'
+        );
     }
     
     // Apply market scoping for non-admin users
@@ -1880,7 +1887,10 @@ function ptp_commhub_render_inbox() {
         if (!empty($user_markets)) {
             $market_conditions = array();
             foreach ($user_markets as $market) {
-                $market_conditions[] = $wpdb->prepare("p.markets LIKE %s", '%' . $market . '%');
+                $market_conditions[] = $wpdb->prepare(
+                    "p.markets LIKE %s",
+                    '%' . $wpdb->esc_like($market) . '%'
+                );
             }
             $where[] = '(' . implode(' OR ', $market_conditions) . ')';
         }
@@ -1908,7 +1918,7 @@ function ptp_commhub_render_inbox() {
         LEFT JOIN {$wpdb->prefix}ptp_messages m ON c.last_message_id = m.id
         WHERE {$where_sql}
         ORDER BY c.last_message_at DESC
-        LIMIT 100
+        LIMIT " . intval(PTP_COMM_INBOX_PAGE_SIZE) . "
     ");
     
     // Get stats for filters
@@ -1924,17 +1934,17 @@ function ptp_commhub_render_inbox() {
         WHERE {$where_sql}
     ");
     
-    // Get available markets
-    $markets = $wpdb->get_col("
-        SELECT DISTINCT TRIM(market_item) as market
-        FROM {$wpdb->prefix}ptp_parents
-        CROSS JOIN JSON_TABLE(
-            CONCAT('[\"', REPLACE(TRIM(markets), ',', '\",\"'), '\"]'),
-            '$[*]' COLUMNS(market_item VARCHAR(50) PATH '$')
-        ) AS markets_split
-        WHERE markets IS NOT NULL AND markets != ''
-        ORDER BY market
-    ");
+    // Get available markets without relying on JSON_TABLE (MySQL 5.7 compatibility)
+    $market_rows = $wpdb->get_col("SELECT markets FROM {$wpdb->prefix}ptp_parents WHERE markets IS NOT NULL AND markets != ''");
+    $markets = array();
+    foreach ($market_rows as $market_list) {
+        $tokens = array_filter(array_map('trim', explode(',', $market_list)));
+        foreach ($tokens as $token) {
+            $markets[$token] = $token;
+        }
+    }
+    ksort($markets);
+    $markets = array_values($markets);
     
     // Viewing specific conversation?
     $viewing_conversation = null;
@@ -1960,14 +1970,15 @@ function ptp_commhub_render_inbox() {
         if ($viewing_conversation) {
             // Get messages
             $messages = $wpdb->get_results($wpdb->prepare("
-                SELECT 
+                SELECT
                     m.*,
                     u.display_name as sent_by_name
                 FROM {$wpdb->prefix}ptp_messages m
                 LEFT JOIN {$wpdb->users} u ON m.sent_by_user_id = u.ID
                 WHERE m.conversation_id = %d
                 ORDER BY m.created_at ASC
-            ", $conv_id));
+                LIMIT %d
+            ", $conv_id, PTP_COMM_THREAD_PAGE_SIZE));
             
             // Get related orders
             $related_orders = array();
@@ -1978,14 +1989,11 @@ function ptp_commhub_render_inbox() {
                 }
             }
             
-            // Mark as read
-            $wpdb->update(
-                $wpdb->prefix . 'ptp_conversations',
-                array('unread_count' => 0),
-                array('id' => $conv_id),
-                array('%d'),
-                array('%d')
-            );
+            // Mark as read using an atomic decrement to avoid race conditions with incoming messages
+            $wpdb->query($wpdb->prepare(
+                "UPDATE {$wpdb->prefix}ptp_conversations SET unread_count = GREATEST(0, unread_count - 1) WHERE id = %d",
+                $conv_id
+            ));
         }
     }
     
@@ -2486,8 +2494,10 @@ function ptp_commhub_render_inbox() {
     function ptp_updateCharCount() {
         const content = jQuery('#ptp-message-content').val();
         const length = content.length;
-        const segments = Math.ceil(length / 160) || 0;
-        
+        const hasUnicode = /[^\x00-\x7F]/.test(content);
+        const segmentSize = hasUnicode ? 70 : 160;
+        const segments = length === 0 ? 0 : Math.ceil(length / segmentSize);
+
         jQuery('#ptp-char-count').text(length);
         jQuery('#ptp-sms-segments').text(segments);
     }
@@ -2510,6 +2520,13 @@ function ptp_commhub_render_inbox() {
         $('#ptp-message-content').on('input', ptp_updateCharCount);
         ptp_updateCharCount();
     });
+
+    function ptp_showMergeTags() {
+        const helper = jQuery('.ptp-merge-tags-help');
+        if (helper.length) {
+            helper.slideToggle(150);
+        }
+    }
     </script>
     <?php
 }
@@ -2563,7 +2580,54 @@ function ptp_commhub_ajax_assign_conversation() {
     );
     
     ptp_commhub_log_audit('assign_conversation', 'conversation', $conv_id, array('user_id' => $user_id));
-    
+
+    wp_send_json_success();
+}
+
+add_action('wp_ajax_ptp_launch_campaign', 'ptp_commhub_ajax_launch_campaign');
+function ptp_commhub_ajax_launch_campaign() {
+    check_ajax_referer('ptp_commhub_nonce', 'nonce');
+
+    if (!current_user_can('manage_ptp_campaigns')) {
+        wp_send_json_error('Unauthorized');
+    }
+
+    global $wpdb;
+
+    $campaign_id = intval($_POST['campaign_id']);
+    $wpdb->update(
+        $wpdb->prefix . 'ptp_campaigns',
+        array(
+            'status' => 'active',
+            'started_at' => current_time('mysql')
+        ),
+        array('id' => $campaign_id),
+        array('%s', '%s'),
+        array('%d')
+    );
+
+    wp_send_json_success();
+}
+
+add_action('wp_ajax_ptp_pause_campaign', 'ptp_commhub_ajax_pause_campaign');
+function ptp_commhub_ajax_pause_campaign() {
+    check_ajax_referer('ptp_commhub_nonce', 'nonce');
+
+    if (!current_user_can('manage_ptp_campaigns')) {
+        wp_send_json_error('Unauthorized');
+    }
+
+    global $wpdb;
+
+    $campaign_id = intval($_POST['campaign_id']);
+    $wpdb->update(
+        $wpdb->prefix . 'ptp_campaigns',
+        array('status' => 'paused'),
+        array('id' => $campaign_id),
+        array('%s'),
+        array('%d')
+    );
+
     wp_send_json_success();
 }
 
@@ -2604,12 +2668,13 @@ function ptp_commhub_send_message($conversation_id, $content, $channel = 'sms') 
             $wpdb->prefix . 'ptp_message_queue',
             array(
                 'parent_id' => $conversation->parent_id,
+                'conversation_id' => $conversation->id,
                 'channel' => $channel,
                 'content' => $content,
                 'priority' => 1,
                 'scheduled_for' => current_time('mysql')
             ),
-            array('%d', '%s', '%s', '%d', '%s')
+            array('%d', '%d', '%s', '%s', '%d', '%s')
         );
     } else {
         // Send immediately
@@ -2762,6 +2827,43 @@ function ptp_commhub_render_campaigns() {
             <?php endif; ?>
         </div>
     </div>
+    <script>
+    function ptp_launchCampaign(id) {
+        if (!confirm('Launch this campaign now?')) {
+            return;
+        }
+
+        jQuery.post(ptpCommHub.ajaxUrl, {
+            action: 'ptp_launch_campaign',
+            nonce: ptpCommHub.nonce,
+            campaign_id: id
+        }).done(function(response) {
+            if (response && response.success) {
+                location.reload();
+            } else {
+                alert('Failed to launch campaign.');
+            }
+        });
+    }
+
+    function ptp_pauseCampaign(id) {
+        if (!confirm('Pause this campaign?')) {
+            return;
+        }
+
+        jQuery.post(ptpCommHub.ajaxUrl, {
+            action: 'ptp_pause_campaign',
+            nonce: ptpCommHub.nonce,
+            campaign_id: id
+        }).done(function(response) {
+            if (response && response.success) {
+                location.reload();
+            } else {
+                alert('Failed to pause campaign.');
+            }
+        });
+    }
+    </script>
     <?php
 }
 
@@ -3874,7 +3976,10 @@ function ptp_commhub_render_contacts() {
     }
     
     if ($market_filter !== 'all') {
-        $where[] = $wpdb->prepare("markets LIKE %s", '%' . $market_filter . '%');
+        $where[] = $wpdb->prepare(
+            "markets LIKE %s",
+            '%' . $wpdb->esc_like($market_filter) . '%'
+        );
     }
     
     if (!empty($search)) {
@@ -4631,6 +4736,15 @@ function ptp_commhub_render_settings() {
     <script>
     jQuery(document).ready(function($) {
         // Environment switching
+        var env = $('input[name="twilio_environment"]:checked').val();
+        if (env === 'live') {
+            $('#live-credentials').show();
+            $('#sandbox-credentials').hide();
+        } else {
+            $('#live-credentials').hide();
+            $('#sandbox-credentials').show();
+        }
+
         $('input[name="twilio_environment"]').change(function() {
             if ($(this).val() === 'live') {
                 $('#live-credentials').show();
@@ -4639,7 +4753,7 @@ function ptp_commhub_render_settings() {
                 $('#live-credentials').hide();
                 $('#sandbox-credentials').show();
             }
-        }).trigger('change');
+        });
     });
     
     function ptp_toggleMask(button) {
@@ -7141,12 +7255,37 @@ function ptp_comm_import_parents_csv($file) {
 /**
  * Register REST API Endpoints
  */
+function ptp_comm_validate_twilio_webhook($request) {
+    if (!class_exists('Twilio\\Security\\RequestValidator')) {
+        if (file_exists(PTP_COMM_PLUGIN_DIR . 'vendor/autoload.php')) {
+            require_once PTP_COMM_PLUGIN_DIR . 'vendor/autoload.php';
+        }
+    }
+
+    $signature = $request->get_header('X-Twilio-Signature');
+    $auth_token = get_option('ptp_comm_twilio_token');
+
+    if (empty($signature) || empty($auth_token) || !class_exists('Twilio\\Security\\RequestValidator')) {
+        return new WP_Error('forbidden', __('Invalid Twilio signature', 'ptp-communication-hub'), array('status' => 403));
+    }
+
+    $validator = new Twilio\Security\RequestValidator($auth_token);
+    $url = rest_url(trim($request->get_route(), '/'));
+    $params = $request->get_params();
+
+    if (!$validator->validate($signature, $url, $params)) {
+        return new WP_Error('forbidden', __('Invalid Twilio signature', 'ptp-communication-hub'), array('status' => 403));
+    }
+
+    return true;
+}
+
 function ptp_comm_register_rest_routes() {
     // SMS webhook
     register_rest_route('ptp-comm/v1', '/webhook/twilio', array(
         'methods' => 'POST',
         'callback' => 'ptp_comm_twilio_webhook',
-        'permission_callback' => '__return_true'
+        'permission_callback' => 'ptp_comm_validate_twilio_webhook'
     ));
     
     // Voice call webhook
@@ -7388,8 +7527,9 @@ function ptp_commhub_process_message_queue() {
             continue;
         }
         
-        // Send the message
-        $result = ptp_commhub_send_sms_immediate($msg->parent_id, $msg->content, $msg->campaign_id);
+        // Send the message with the correct conversation context
+        $conversation_id = $msg->conversation_id ? (int) $msg->conversation_id : null;
+        $result = ptp_commhub_send_sms_immediate($msg->parent_id, $msg->content, $conversation_id);
         
         if ($result) {
             $wpdb->update(
@@ -7455,12 +7595,27 @@ function ptp_commhub_create_daily_snapshot() {
     ", $yesterday));
     
     $conversations_new = $wpdb->get_var($wpdb->prepare("
-        SELECT COUNT(*) FROM {$wpdb->prefix}ptp_conversations 
+        SELECT COUNT(*) FROM {$wpdb->prefix}ptp_conversations
         WHERE DATE(created_at) = %s
     ", $yesterday));
-    
+
+    $conversations_resolved = $wpdb->get_var($wpdb->prepare("
+        SELECT COUNT(*) FROM {$wpdb->prefix}ptp_conversations
+        WHERE status = 'resolved' AND DATE(updated_at) = %s
+    ", $yesterday));
+
+    $calls_made = $wpdb->get_var($wpdb->prepare("
+        SELECT COUNT(*) FROM {$wpdb->prefix}ptp_voice_calls
+        WHERE direction = 'outbound' AND DATE(created_at) = %s
+    ", $yesterday));
+
+    $calls_received = $wpdb->get_var($wpdb->prepare("
+        SELECT COUNT(*) FROM {$wpdb->prefix}ptp_voice_calls
+        WHERE direction = 'inbound' AND DATE(created_at) = %s
+    ", $yesterday));
+
     $optouts = $wpdb->get_var($wpdb->prepare("
-        SELECT COUNT(*) FROM {$wpdb->prefix}ptp_compliance_log 
+        SELECT COUNT(*) FROM {$wpdb->prefix}ptp_compliance_log
         WHERE event_type = 'opt_out' AND DATE(created_at) = %s
     ", $yesterday));
     
@@ -7474,11 +7629,14 @@ function ptp_commhub_create_daily_snapshot() {
             'messages_sent' => $messages_sent,
             'messages_received' => $messages_received,
             'conversations_new' => $conversations_new,
+            'conversations_resolved' => $conversations_resolved,
+            'calls_made' => $calls_made,
+            'calls_received' => $calls_received,
             'optouts' => $optouts,
             'response_rate' => $response_rate,
             'market' => null
         ),
-        array('%s', '%d', '%d', '%d', '%d', '%f', '%s')
+        array('%s', '%d', '%d', '%d', '%d', '%d', '%d', '%f', '%s')
     );
 }
 
